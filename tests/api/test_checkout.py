@@ -7,11 +7,13 @@ import pytest
 from django.core.exceptions import ValidationError
 from prices import Money, TaxedMoney
 
+from saleor.checkout import calculations
 from saleor.checkout.error_codes import CheckoutErrorCode
 from saleor.checkout.models import Checkout
 from saleor.checkout.utils import clean_checkout, is_fully_paid
 from saleor.core.payments import PaymentInterface
 from saleor.core.taxes import zero_money
+from saleor.extensions.manager import ExtensionsManager
 from saleor.graphql.checkout.mutations import (
     clean_shipping_method,
     update_checkout_shipping_method_if_invalid,
@@ -432,6 +434,57 @@ def test_checkout_available_shipping_methods(
 
     shipping_method = shipping_zone.shipping_methods.first()
     assert data["availableShippingMethods"] == [{"name": shipping_method.name}]
+
+
+@pytest.mark.parametrize(
+    "expected_price_type, expected_price, display_gross_prices",
+    (("gross", 13, True), ("net", 10, False)),
+)
+def test_checkout_available_shipping_methods_with_price_displayed(
+    expected_price_type,
+    expected_price,
+    display_gross_prices,
+    monkeypatch,
+    api_client,
+    checkout_with_item,
+    address,
+    shipping_zone,
+    site_settings,
+):
+    shipping_method = shipping_zone.shipping_methods.first()
+    taxed_price = TaxedMoney(net=Money(10, "USD"), gross=Money(13, "USD"))
+    apply_taxes_to_shipping_mock = mock.Mock(return_value=taxed_price)
+    monkeypatch.setattr(
+        ExtensionsManager, "apply_taxes_to_shipping", apply_taxes_to_shipping_mock
+    )
+    site_settings.display_gross_prices = display_gross_prices
+    site_settings.save()
+    checkout_with_item.shipping_address = address
+    checkout_with_item.save()
+
+    query = """
+    query getCheckout($token: UUID!) {
+        checkout(token: $token) {
+            availableShippingMethods {
+                name
+                price {
+                    amount
+                }
+            }
+        }
+    }
+    """
+    variables = {"token": checkout_with_item.token}
+    response = api_client.post_graphql(query, variables)
+    content = get_graphql_content(response)
+    data = content["data"]["checkout"]
+
+    apply_taxes_to_shipping_mock.assert_called_once_with(
+        shipping_method.price, mock.ANY
+    )
+    assert data["availableShippingMethods"] == [
+        {"name": "DHL", "price": {"amount": expected_price}}
+    ]
 
 
 def test_checkout_no_available_shipping_methods_without_address(
@@ -1116,8 +1169,7 @@ def test_checkout_complete(
     checkout_line_variant = checkout_line.variant
 
     gift_current_balance = checkout.get_total_gift_cards_balance()
-    total = checkout.get_total()
-    total = TaxedMoney(total, total)
+    total = calculations.checkout_total(checkout)
     payment = payment_dummy
     payment.is_active = True
     payment.order = None
@@ -1221,8 +1273,7 @@ def test_checkout_complete_does_not_delete_checkout_after_unsuccessful_payment(
     checkout.billing_address = address
     checkout.save()
 
-    total = checkout.get_total()
-    taxed_total = TaxedMoney(total, total)
+    taxed_total = calculations.checkout_total(checkout)
     payment = payment_dummy
     payment.is_active = True
     payment.order = None
@@ -1298,8 +1349,7 @@ def test_checkout_complete_insufficient_stock(
     checkout.shipping_method = shipping_method
     checkout.billing_address = address
     checkout.save()
-    total = checkout.get_total()
-    total = TaxedMoney(total, total)
+    total = calculations.checkout_total(checkout)
     payment = payment_dummy
     payment.is_active = True
     payment.order = None
@@ -1389,14 +1439,10 @@ def test_checkout_prices(user_api_client, checkout_with_item):
     data = content["data"]["checkout"]
     assert data["token"] == str(checkout_with_item.token)
     assert len(data["lines"]) == checkout_with_item.lines.count()
-    total = checkout_with_item.get_total()
-    assert data["totalPrice"]["gross"]["amount"] == (
-        TaxedMoney(total, total).gross.amount
-    )
-    subtotal = checkout_with_item.get_subtotal()
-    assert data["subtotalPrice"]["gross"]["amount"] == (
-        TaxedMoney(subtotal, subtotal).gross.amount
-    )
+    total = calculations.checkout_total(checkout_with_item)
+    assert data["totalPrice"]["gross"]["amount"] == (total.gross.amount)
+    subtotal = calculations.checkout_subtotal(checkout_with_item)
+    assert data["subtotalPrice"]["gross"]["amount"] == (subtotal.gross.amount)
 
 
 MUTATION_UPDATE_SHIPPING_METHOD = """
@@ -1531,8 +1577,7 @@ def test_clean_checkout(checkout_with_item, payment_dummy, address, shipping_met
     checkout.shipping_method = shipping_method
     checkout.billing_address = address
     checkout.save()
-    total = checkout.get_total()
-    total = TaxedMoney(total, total)
+    total = calculations.checkout_total(checkout)
     payment = payment_dummy
     payment.is_active = True
     payment.order = None
@@ -1613,8 +1658,7 @@ def test_clean_checkout_no_payment(checkout_with_item, shipping_method, address)
 
 def test_is_fully_paid(checkout_with_item, payment_dummy):
     checkout = checkout_with_item
-    total = checkout.get_total()
-    total = TaxedMoney(total, total)
+    total = calculations.checkout_total(checkout)
     payment = payment_dummy
     payment.is_active = True
     payment.order = None
@@ -1628,8 +1672,7 @@ def test_is_fully_paid(checkout_with_item, payment_dummy):
 
 def test_is_fully_paid_many_payments(checkout_with_item, payment_dummy):
     checkout = checkout_with_item
-    total = checkout.get_total()
-    total = TaxedMoney(total, total)
+    total = calculations.checkout_total(checkout)
     payment = payment_dummy
     payment.is_active = True
     payment.order = None
@@ -1651,8 +1694,7 @@ def test_is_fully_paid_many_payments(checkout_with_item, payment_dummy):
 
 def test_is_fully_paid_partially_paid(checkout_with_item, payment_dummy):
     checkout = checkout_with_item
-    total = checkout.get_total()
-    total = TaxedMoney(total, total)
+    total = calculations.checkout_total(checkout)
     payment = payment_dummy
     payment.is_active = True
     payment.order = None

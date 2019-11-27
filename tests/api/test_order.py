@@ -1,6 +1,6 @@
 import uuid
 from datetime import date, timedelta
-from unittest.mock import MagicMock, Mock
+from unittest.mock import ANY, MagicMock, Mock
 
 import graphene
 import pytest
@@ -10,6 +10,7 @@ from prices import Money, TaxedMoney
 
 from saleor.account.models import CustomerEvent
 from saleor.core.taxes import zero_taxed_money
+from saleor.extensions.manager import ExtensionsManager
 from saleor.graphql.core.enums import ReportingPeriod
 from saleor.graphql.order.mutations.orders import (
     clean_order_cancel,
@@ -209,6 +210,57 @@ def test_order_query(
         method["minimumOrderPrice"]["amount"]
     )
     assert expected_method.type.upper() == method["type"]
+
+
+@pytest.mark.parametrize(
+    "expected_price_type, expected_price, display_gross_prices",
+    (("gross", 13, True), ("net", 10, False)),
+)
+def test_order_available_shipping_methods_query(
+    expected_price_type,
+    expected_price,
+    display_gross_prices,
+    monkeypatch,
+    staff_api_client,
+    permission_manage_orders,
+    fulfilled_order,
+    shipping_zone,
+    site_settings,
+):
+    query = """
+    query OrdersQuery {
+        orders(first: 1) {
+            edges {
+                node {
+                    availableShippingMethods {
+                        id
+                        price {
+                            amount
+                        }
+                        type
+                    }
+                }
+            }
+        }
+    }
+    """
+    shipping_method = shipping_zone.shipping_methods.first()
+    taxed_price = TaxedMoney(net=Money(10, "USD"), gross=Money(13, "USD"))
+    apply_taxes_to_shipping_mock = Mock(return_value=taxed_price)
+    monkeypatch.setattr(
+        ExtensionsManager, "apply_taxes_to_shipping", apply_taxes_to_shipping_mock
+    )
+    site_settings.display_gross_prices = display_gross_prices
+    site_settings.save()
+
+    staff_api_client.user.user_permissions.add(permission_manage_orders)
+    response = staff_api_client.post_graphql(query)
+    content = get_graphql_content(response)
+    order_data = content["data"]["orders"]["edges"][0]["node"]
+    method = order_data["availableShippingMethods"][0]
+
+    apply_taxes_to_shipping_mock.assert_called_once_with(shipping_method.price, ANY)
+    assert expected_price == method["price"]["amount"]
 
 
 def test_order_query_customer(api_client):
@@ -473,11 +525,13 @@ def test_draft_order_create(
     query = """
     mutation draftCreate(
         $user: ID, $discount: Decimal, $lines: [OrderLineCreateInput],
-        $shippingAddress: AddressInput, $shippingMethod: ID, $voucher: ID) {
+        $shippingAddress: AddressInput, $shippingMethod: ID, $voucher: ID,
+        $customerNote: String) {
             draftOrderCreate(
                 input: {user: $user, discount: $discount,
                 lines: $lines, shippingAddress: $shippingAddress,
-                shippingMethod: $shippingMethod, voucher: $voucher}) {
+                shippingMethod: $shippingMethod, voucher: $voucher,
+                customerNote: $customerNote}) {
                     errors {
                         field
                         message
@@ -499,7 +553,7 @@ def test_draft_order_create(
                         voucher {
                             code
                         }
-
+                        customerNote
                     }
                 }
         }
@@ -515,6 +569,7 @@ def test_draft_order_create(
     variant_1.save()
     variant_1_id = graphene.Node.to_global_id("ProductVariant", variant_1.id)
     discount = "10"
+    customer_note = "Test note"
     variant_list = [
         {"variantId": variant_0_id, "quantity": 2},
         {"variantId": variant_1_id, "quantity": 1},
@@ -529,6 +584,7 @@ def test_draft_order_create(
         "shippingAddress": shipping_address,
         "shippingMethod": shipping_id,
         "voucher": voucher_id,
+        "customerNote": customer_note,
     }
     response = staff_api_client.post_graphql(
         query, variables, permissions=[permission_manage_orders]
@@ -538,6 +594,7 @@ def test_draft_order_create(
     data = content["data"]["draftOrderCreate"]["order"]
     assert data["status"] == OrderStatus.DRAFT.upper()
     assert data["voucher"]["code"] == voucher.code
+    assert data["customerNote"] == customer_note
 
     order = Order.objects.first()
     assert order.user == customer_user
@@ -563,9 +620,11 @@ def test_draft_order_update(
 ):
     order = order_with_lines
     assert not order.voucher
+    assert not order.customer_note
     query = """
-        mutation draftUpdate($id: ID!, $voucher: ID!) {
-            draftOrderUpdate(id: $id, input: {voucher: $voucher}) {
+        mutation draftUpdate($id: ID!, $voucher: ID!, $customerNote: String) {
+            draftOrderUpdate(id: $id,
+                             input: {voucher: $voucher, customerNote: $customerNote}) {
                 errors {
                     field
                     message
@@ -578,7 +637,8 @@ def test_draft_order_update(
         """
     order_id = graphene.Node.to_global_id("Order", order.id)
     voucher_id = graphene.Node.to_global_id("Voucher", voucher.id)
-    variables = {"id": order_id, "voucher": voucher_id}
+    customer_note = "Test customer note"
+    variables = {"id": order_id, "voucher": voucher_id, "customerNote": customer_note}
     response = staff_api_client.post_graphql(
         query, variables, permissions=[permission_manage_orders]
     )
@@ -587,6 +647,7 @@ def test_draft_order_update(
     assert not data["errors"]
     order.refresh_from_db()
     assert order.voucher
+    assert order.customer_note == customer_note
 
 
 def test_draft_order_update_doing_nothing_generates_no_events(

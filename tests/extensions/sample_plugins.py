@@ -1,5 +1,5 @@
 from decimal import Decimal
-from typing import Union
+from typing import TYPE_CHECKING, Union
 
 from django_countries.fields import Country
 from prices import Money, TaxedMoney
@@ -8,6 +8,11 @@ from saleor.core.taxes import TaxType
 from saleor.extensions import ConfigurationTypeField
 from saleor.extensions.base_plugin import BasePlugin
 from saleor.extensions.models import PluginConfiguration
+from saleor.product.models import Product, ProductType
+
+if TYPE_CHECKING:
+    # flake8: noqa
+    from saleor.product.models import Product, ProductType
 
 
 class PluginSample(BasePlugin):
@@ -19,7 +24,7 @@ class PluginSample(BasePlugin):
             "label": "Username",
         },
         "Password": {
-            "type": ConfigurationTypeField.STRING,
+            "type": ConfigurationTypeField.PASSWORD,
             "help_text": "Password input field",
             "label": "Password",
         },
@@ -27,6 +32,11 @@ class PluginSample(BasePlugin):
             "type": ConfigurationTypeField.BOOLEAN,
             "help_text": "Use sandbox",
             "label": "Use sandbox",
+        },
+        "API private key": {
+            "type": ConfigurationTypeField.SECRET,
+            "help_text": "API key",
+            "label": "Private key",
         },
     }
 
@@ -38,29 +48,30 @@ class PluginSample(BasePlugin):
             "active": True,
             "configuration": [
                 {"name": "Username", "value": "admin"},
-                {"name": "Password", "value": "123"},
+                {"name": "Password", "value": None},
                 {"name": "Use sandbox", "value": False},
+                {"name": "API private key", "value": None},
             ],
         }
 
     def calculate_checkout_total(self, checkout, discounts, previous_value):
-        total = Money("1.0", currency=checkout.get_total().currency)
+        total = Money("1.0", currency=checkout.currency)
         return TaxedMoney(total, total)
 
     def calculate_checkout_subtotal(self, checkout, discounts, previous_value):
-        subtotal = Money("1.0", currency=checkout.get_total().currency)
+        subtotal = Money("1.0", currency=checkout.currency)
         return TaxedMoney(subtotal, subtotal)
 
     def calculate_checkout_shipping(self, checkout, discounts, previous_value):
-        price = Money("1.0", currency=checkout.get_total().currency)
+        price = Money("1.0", currency=checkout.currency)
         return TaxedMoney(price, price)
 
     def calculate_order_shipping(self, order, previous_value):
-        price = Money("1.0", currency=order.total.currency)
+        price = Money("1.0", currency=order.currency)
         return TaxedMoney(price, price)
 
     def calculate_checkout_line_total(self, checkout_line, discounts, previous_value):
-        price = Money("1.0", currency=checkout_line.get_total().currency)
+        price = Money("1.0", currency=checkout_line.checkout.currency)
         return TaxedMoney(price, price)
 
     def calculate_order_line_unit(self, order_line, previous_value):
@@ -95,7 +106,6 @@ class PluginSample(BasePlugin):
 
 class PluginInactive(BasePlugin):
     PLUGIN_NAME = "PluginInactive"
-    CONFIG_STRUCTURE = {}
 
     @classmethod
     def _get_default_configuration(cls):
@@ -103,7 +113,7 @@ class PluginInactive(BasePlugin):
             "name": "PluginInactive",
             "description": "Test plugin description_2",
             "active": False,
-            "configuration": [],
+            "configuration": None,
         }
 
 

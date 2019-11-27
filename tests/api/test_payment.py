@@ -2,8 +2,8 @@ from decimal import Decimal
 
 import graphene
 import pytest
-from prices import TaxedMoney
 
+from saleor.checkout import calculations
 from saleor.core.utils import get_country_name_by_code
 from saleor.graphql.payment.enums import OrderAction, PaymentChargeStatusEnum
 from saleor.payment.interface import CreditCardInfo, CustomerSource, TokenConfig
@@ -94,8 +94,7 @@ def test_checkout_add_payment(
 ):
     checkout = checkout_with_item
     checkout_id = graphene.Node.to_global_id("Checkout", checkout.pk)
-    total = checkout.get_total()
-    total = TaxedMoney(net=total, gross=total)
+    total = calculations.checkout_total(checkout)
     variables = {
         "checkoutId": checkout_id,
         "input": {
@@ -120,13 +119,65 @@ def test_checkout_add_payment(
     assert payment.charge_status == ChargeStatus.NOT_CHARGED
 
 
+def test_checkout_add_payment_default_amount(
+    user_api_client, checkout_with_item, graphql_address_data
+):
+    checkout = checkout_with_item
+    checkout_id = graphene.Node.to_global_id("Checkout", checkout.pk)
+    total = calculations.checkout_total(checkout)
+
+    variables = {
+        "checkoutId": checkout_id,
+        "input": {
+            "gateway": "DUMMY",
+            "token": "sample-token",
+            "billingAddress": graphql_address_data,
+        },
+    }
+    response = user_api_client.post_graphql(CREATE_QUERY, variables)
+    content = get_graphql_content(response)
+    data = content["data"]["checkoutPaymentCreate"]
+    assert not data["errors"]
+    transactions = data["payment"]["transactions"]
+    assert not transactions
+    payment = Payment.objects.get()
+    assert payment.checkout == checkout
+    assert payment.is_active
+    assert payment.token == "sample-token"
+    assert payment.total == total.gross.amount
+    assert payment.currency == total.gross.currency
+    assert payment.charge_status == ChargeStatus.NOT_CHARGED
+
+
+def test_checkout_add_payment_bad_amount(
+    user_api_client, checkout_with_item, graphql_address_data
+):
+    checkout = checkout_with_item
+    checkout_id = graphene.Node.to_global_id("Checkout", checkout.pk)
+
+    variables = {
+        "checkoutId": checkout_id,
+        "input": {
+            "gateway": "DUMMY",
+            "token": "sample-token",
+            "amount": str(
+                calculations.checkout_total(checkout).gross.amount + Decimal(1)
+            ),
+            "billingAddress": graphql_address_data,
+        },
+    }
+    response = user_api_client.post_graphql(CREATE_QUERY, variables)
+    content = get_graphql_content(response)
+    data = content["data"]["checkoutPaymentCreate"]
+    assert data["errors"]
+
+
 def test_use_checkout_billing_address_as_payment_billing(
     user_api_client, checkout_with_item, address
 ):
     checkout = checkout_with_item
     checkout_id = graphene.Node.to_global_id("Checkout", checkout.pk)
-    total = checkout.get_total()
-    total = TaxedMoney(net=total, gross=total)
+    total = calculations.checkout_total(checkout)
     variables = {
         "checkoutId": checkout_id,
         "input": {
