@@ -1,3 +1,4 @@
+from django.contrib import admin
 from django.conf import settings
 from django.conf.urls import include, url
 from django.conf.urls.i18n import i18n_patterns
@@ -19,6 +20,7 @@ from .order.urls import urlpatterns as order_urls
 from .page.urls import urlpatterns as page_urls
 from .product.urls import urlpatterns as product_urls
 from .search.urls import urlpatterns as search_urls
+
 
 handler404 = "saleor.core.views.handle_404"
 
@@ -45,6 +47,7 @@ translatable_urlpatterns = [
     url(r"^account/", include((account_urls, "account"), namespace="account")),
     url(r"^feeds/", include((feed_urls, "data_feeds"), namespace="data_feeds")),
     url(r"^search/", include((search_urls, "search"), namespace="search")),
+    url(r"^admin/", admin.site.urls),
 ]
 
 urlpatterns = non_translatable_urlpatterns + i18n_patterns(*translatable_urlpatterns)

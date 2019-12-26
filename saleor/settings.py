@@ -55,7 +55,7 @@ CACHES = {"default": django_cache_url.config()}
 
 DATABASES = {
     "default": dj_database_url.config(
-        default="postgres://saleor:saleor@localhost:5432/saleor", conn_max_age=600
+        default="postgres://awgstore:gurudev@it@shantikunj@localhost:5432/awgpstore", conn_max_age=600
     )
 }
 
@@ -227,6 +227,7 @@ INSTALLED_APPS = [
     # External apps that need to go before django's
     "storages",
     # Django modules
+    "django.contrib.admin",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
@@ -273,6 +274,7 @@ INSTALLED_APPS = [
     "impersonate",
     "phonenumber_field",
     "captcha",
+    'extension',
 ]
 
 
@@ -371,8 +373,8 @@ AUTH_PASSWORD_VALIDATORS = [
     }
 ]
 
-DEFAULT_COUNTRY = os.environ.get("DEFAULT_COUNTRY", "US")
-DEFAULT_CURRENCY = os.environ.get("DEFAULT_CURRENCY", "USD")
+DEFAULT_COUNTRY = os.environ.get("DEFAULT_COUNTRY", "IN")
+DEFAULT_CURRENCY = os.environ.get("DEFAULT_CURRENCY", "INR")
 DEFAULT_DECIMAL_PLACES = get_currency_fraction(DEFAULT_CURRENCY)
 DEFAULT_MAX_DIGITS = 12
 DEFAULT_CURRENCY_CODE_LENGTH = 3
